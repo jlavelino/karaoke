@@ -1,56 +1,53 @@
-# Welcome to your Expo app 👋
+# NumberKanta 🎤
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+An offline-first, Android-first karaoke/videoke mobile application recreating the familiar song-number workflow of a traditional videoke machine.
 
-## Get started
+## Current Status: Phase 1 Completed (UI & Navigation Prototype)
 
-1. Install dependencies
+- **Keypad Screen (`/`)**: Large touch-friendly numeric keypad (0–9), vintage LED digital song number display with leading zeros preserved, instant search preview card, and *Play Now* / *Add to Queue* actions.
+- **Songbook Screen (`/songbook`)**: Scrollable library with title/artist search, favorites filter, prominent song number badges, and quick queue/play triggers.
+- **Queue Screen (`/queue`)**: "Now Singing" widget, up-next ordered list with up/down reorder buttons, remove song, and clear queue with confirmation.
+- **Player Screen (`/player`)**: Fullscreen-ready videoke stage layout with lyrics mockup, bouncing ball prompt, elapsed/duration timer, seekbar, and player controls.
+- **Import Screen (`/import`)**: Modal interface for assigning unique song numbers, titles, and artists to local video files.
 
-   ```bash
-   npm install
-   ```
+---
 
-2. Start the app
+## Getting Started
 
-   ```bash
-   npx expo start
-   ```
+### Prerequisites
 
-In the output, you'll find options to open the app in a
+- Node.js (v20+ or v22+)
+- Android device or emulator with Expo Go or Development Build
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+### Installation
 
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+### Running Locally
 
-### Other setup steps
+```bash
+npx expo start
+```
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+Press `a` in the terminal to open on a connected Android device or emulator, or scan the QR code using Expo Go.
 
-## Learn more
+### Quality Checks
 
-To learn more about developing your project with Expo, look at the following resources:
+```bash
+# TypeScript Typecheck
+npx tsc --noEmit
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+# ESLint
+npx expo lint
 
-## Join the community
+# Expo Doctor Dependency & Config Diagnostics
+npx expo-doctor
+```
 
-Join our community of developers creating universal apps.
+---
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## Technical Specification
+
+See [NumberKanta-Spec.md](NumberKanta-Spec.md) for full architecture, roadmap stages, and database schema.
