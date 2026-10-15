@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { runMigrations } from './migrations';
 
 export const DATABASE_NAME = 'numberkanta.db';
 
@@ -20,6 +21,9 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
   `);
+
+  // Run database migrations to ensure schema is up-to-date
+  await runMigrations(db);
 
   dbInstance = db;
   return dbInstance;
