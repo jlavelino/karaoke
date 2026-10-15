@@ -1,5 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import { runMigrations } from './migrations';
+import { seedInitialSongsIfEmpty } from './seed';
 
 export const DATABASE_NAME = 'numberkanta.db';
 
@@ -24,6 +25,9 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 
   // Run database migrations to ensure schema is up-to-date
   await runMigrations(db);
+
+  // Seed default sample songs if database is freshly initialized
+  await seedInitialSongsIfEmpty(db);
 
   dbInstance = db;
   return dbInstance;
