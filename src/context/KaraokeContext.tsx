@@ -1,9 +1,17 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Song, QueueItem } from '@/types/song';
-import { MOCK_SONGS, MOCK_QUEUE } from '@/data/mockSongs';
+import { MOCK_QUEUE } from '@/data/mockSongs';
+import {
+  getAllSongs,
+  insertSong,
+  deleteSong as deleteSongService,
+  toggleFavoriteSong,
+  CreateSongInput,
+} from '@/services/songService';
 
 interface KaraokeContextType {
   songs: Song[];
+  isLoading: boolean;
   queue: QueueItem[];
   currentSong: Song | null;
   isPlaying: boolean;
@@ -14,17 +22,56 @@ interface KaraokeContextType {
   clearQueue: () => void;
   togglePlayPause: () => void;
   skipNext: () => void;
-  toggleFavorite: (songId: string) => void;
+  toggleFavorite: (songId: string) => Promise<void>;
   findSongByNumber: (num: string) => Song | undefined;
+  reloadSongs: () => Promise<void>;
+  addSong: (input: CreateSongInput) => Promise<Song>;
+  removeSong: (songId: string) => Promise<boolean>;
 }
 
 const KaraokeContext = createContext<KaraokeContextType | undefined>(undefined);
 
 export function KaraokeProvider({ children }: { children: React.ReactNode }) {
-  const [songs, setSongs] = useState<Song[]>(MOCK_SONGS);
+  const [songs, setSongs] = useState<Song[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [queue, setQueue] = useState<QueueItem[]>(MOCK_QUEUE);
-  const [currentSong, setCurrentSong] = useState<Song | null>(MOCK_SONGS[0]);
+  const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
+
+  const reloadSongs = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const loaded = await getAllSongs();
+      setSongs(loaded);
+      setCurrentSong((prev) => prev ?? (loaded.length > 0 ? loaded[0] : null));
+    } catch (err) {
+      console.error('Failed to load songs from SQLite:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    getAllSongs()
+      .then((loaded) => {
+        if (!isMounted) return;
+        setSongs(loaded);
+        setCurrentSong((prev) => prev ?? (loaded.length > 0 ? loaded[0] : null));
+      })
+      .catch((err) => {
+        console.error('Failed to load initial songs from SQLite:', err);
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const findSongByNumber = (num: string) => {
     return songs.find((s) => s.song_number === num);
@@ -82,16 +129,49 @@ export function KaraokeProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const toggleFavorite = (songId: string) => {
+  const toggleFavorite = async (songId: string) => {
+    // Optimistic UI update for immediate visual feedback
     setSongs((prev) =>
       prev.map((s) => (s.id === songId ? { ...s, is_favorite: !s.is_favorite } : s))
     );
+
+    try {
+      const isNowFavorite = await toggleFavoriteSong(songId);
+      setSongs((prev) =>
+        prev.map((s) => (s.id === songId ? { ...s, is_favorite: isNowFavorite } : s))
+      );
+    } catch (err) {
+      console.error('Failed to toggle favorite in SQLite:', err);
+      // Revert on failure
+      setSongs((prev) =>
+        prev.map((s) => (s.id === songId ? { ...s, is_favorite: !s.is_favorite } : s))
+      );
+    }
+  };
+
+  const addSong = async (input: CreateSongInput): Promise<Song> => {
+    const created = await insertSong(input);
+    await reloadSongs();
+    return created;
+  };
+
+  const removeSong = async (songId: string): Promise<boolean> => {
+    const success = await deleteSongService(songId);
+    if (success) {
+      await reloadSongs();
+      setQueue((prev) => prev.filter((item) => item.song_id !== songId));
+      if (currentSong?.id === songId) {
+        setCurrentSong(null);
+      }
+    }
+    return success;
   };
 
   return (
     <KaraokeContext.Provider
       value={{
         songs,
+        isLoading,
         queue,
         currentSong,
         isPlaying,
@@ -104,6 +184,9 @@ export function KaraokeProvider({ children }: { children: React.ReactNode }) {
         skipNext,
         toggleFavorite,
         findSongByNumber,
+        reloadSongs,
+        addSong,
+        removeSong,
       }}>
       {children}
     </KaraokeContext.Provider>

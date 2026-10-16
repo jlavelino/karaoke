@@ -12,10 +12,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { Colors } from '@/constants/theme';
 import { useKaraoke } from '@/context/KaraokeContext';
-import { Song } from '@/types/song';
 
 export default function ImportScreen() {
-  const { songs, findSongByNumber } = useKaraoke();
+  const { findSongByNumber, addSong } = useKaraoke();
 
   const [selectedFileName, setSelectedFileName] = useState<string>('sweet_caroline_karaoke.mp4');
   const [songNumber, setSongNumber] = useState<string>('0999');
@@ -42,7 +41,7 @@ export default function ImportScreen() {
     );
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!songNumber.trim()) {
       Alert.alert('Validation Error', 'Please enter a song number.');
       return;
@@ -62,24 +61,23 @@ export default function ImportScreen() {
       return;
     }
 
-    const newSong: Song = {
-      id: `s_${Date.now()}`,
-      song_number: songNumber.trim(),
-      title: title.trim(),
-      artist: artist.trim() || 'Unknown Artist',
-      media_path: `local://${selectedFileName}`,
-      duration_seconds: 210,
-      created_at: Date.now(),
-      updated_at: Date.now(),
-      is_favorite: false,
-    };
+    try {
+      const created = await addSong({
+        song_number: songNumber.trim(),
+        title: title.trim(),
+        artist: artist.trim() || 'Unknown Artist',
+        media_path: `local://${selectedFileName}`,
+        duration_seconds: 210,
+        is_favorite: false,
+      });
 
-    // In-memory addition for Phase 1
-    songs.push(newSong);
-
-    Alert.alert('Success', `Imported "${newSong.title}" as #${newSong.song_number}!`, [
-      { text: 'OK', onPress: () => router.back() },
-    ]);
+      Alert.alert('Success', `Imported "${created.title}" as #${created.song_number}!`, [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to import song.';
+      Alert.alert('Error', message);
+    }
   };
 
   return (
