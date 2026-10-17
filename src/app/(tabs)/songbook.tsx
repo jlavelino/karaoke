@@ -17,7 +17,7 @@ import SongListItem from '@/components/SongListItem';
 import { Song } from '@/types/song';
 
 export default function SongbookScreen() {
-  const { songs, playSongNow, addToQueue, toggleFavorite } = useKaraoke();
+  const { songs, playSongNow, addToQueue, toggleFavorite, removeSong } = useKaraoke();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterFavorites, setFilterFavorites] = useState(false);
 
@@ -39,6 +39,26 @@ export default function SongbookScreen() {
   const handleAddToQueue = (song: Song) => {
     addToQueue(song);
     Alert.alert('Queued', `"${song.title}" (#${song.song_number}) added to queue!`);
+  };
+
+  const handleDeleteSong = (song: Song) => {
+    Alert.alert(
+      'Delete Song',
+      `Are you sure you want to delete "${song.title}" (#${song.song_number})? This will also remove its offline video file.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const success = await removeSong(song.id);
+            if (success) {
+              Alert.alert('Deleted', `"${song.title}" was removed from the library.`);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -112,6 +132,7 @@ export default function SongbookScreen() {
               onPlayNow={handlePlayNow}
               onAddToQueue={handleAddToQueue}
               onToggleFavorite={toggleFavorite}
+              onDeleteSong={handleDeleteSong}
             />
           )}
           contentContainerStyle={styles.listContent}

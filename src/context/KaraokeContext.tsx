@@ -8,6 +8,7 @@ import {
   toggleFavoriteSong,
   CreateSongInput,
 } from '@/services/songService';
+import { deleteMediaFile } from '@/platform/mediaStorage';
 
 interface KaraokeContextType {
   songs: Song[];
@@ -156,8 +157,14 @@ export function KaraokeProvider({ children }: { children: React.ReactNode }) {
   };
 
   const removeSong = async (songId: string): Promise<boolean> => {
+    const songToDelete = songs.find((s) => s.id === songId);
+    const mediaPath = songToDelete?.media_path;
+
     const success = await deleteSongService(songId);
     if (success) {
+      if (mediaPath) {
+        await deleteMediaFile(mediaPath);
+      }
       await reloadSongs();
       setQueue((prev) => prev.filter((item) => item.song_id !== songId));
       if (currentSong?.id === songId) {
