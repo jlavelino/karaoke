@@ -7,41 +7,82 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import * as DocumentPicker from 'expo-document-picker';
 import { Colors } from '@/constants/theme';
 import { useKaraoke } from '@/context/KaraokeContext';
+import { parseFilenameMetadata, importVideoFile } from '@/services/mediaImportService';
+
+function formatFileSize(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '';
+  if (bytes < 1024 * 1024) {
+    return `(${(bytes / 1024).toFixed(1)} KB)`;
+  }
+  return `(${(bytes / (1024 * 1024)).toFixed(1)} MB)`;
+}
 
 export default function ImportScreen() {
-  const { findSongByNumber, addSong } = useKaraoke();
+  const { findSongByNumber, reloadSongs } = useKaraoke();
 
-  const [selectedFileName, setSelectedFileName] = useState<string>('sweet_caroline_karaoke.mp4');
-  const [songNumber, setSongNumber] = useState<string>('0999');
-  const [title, setTitle] = useState<string>('Sweet Caroline');
-  const [artist, setArtist] = useState<string>('Neil Diamond');
+  const [selectedFile, setSelectedFile] = useState<{
+    uri: string;
+    name: string;
+    size?: number;
+    mimeType?: string;
+  } | null>(null);
 
-  const handleSimulateFilePicker = () => {
-    // In Phase 3, this invokes expo-document-picker.
-    // For Phase 1 prototype, it simulates choosing a sample file and auto-parsing metadata.
-    Alert.alert(
-      'Local File Selected',
-      'Selected: "9911 - Don\'t Stop Believin\' - Journey.mp4"\nAuto-filling metadata...',
-      [
-        {
-          text: 'Apply',
-          onPress: () => {
-            setSelectedFileName("9911 - Don't Stop Believin' - Journey.mp4");
-            setSongNumber('9911');
-            setTitle("Don't Stop Believin'");
-            setArtist('Journey');
-          },
-        },
-      ]
-    );
+  const [songNumber, setSongNumber] = useState<string>('');
+  const [title, setTitle] = useState<string>('');
+  const [artist, setArtist] = useState<string>('');
+  const [isImporting, setIsImporting] = useState<boolean>(false);
+
+  const handlePickVideo = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['video/*', 'video/mp4', 'video/m4v', 'video/mkv'],
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) {
+        return;
+      }
+
+      const asset = result.assets[0];
+      setSelectedFile({
+        uri: asset.uri,
+        name: asset.name,
+        size: asset.size,
+        mimeType: asset.mimeType,
+      });
+
+      // Auto-extract metadata from the filename
+      const parsed = parseFilenameMetadata(asset.name);
+      if (parsed.suggestedNumber && !songNumber) {
+        setSongNumber(parsed.suggestedNumber);
+      }
+      if (parsed.suggestedTitle) {
+        setTitle(parsed.suggestedTitle);
+      }
+      if (parsed.suggestedArtist) {
+        setArtist(parsed.suggestedArtist);
+      }
+    } catch (err: unknown) {
+      console.error('File pick error:', err);
+      Alert.alert(
+        'File Picker Error',
+        'Could not open the system file picker. Please verify permissions and try again.'
+      );
+    }
   };
 
   const handleSave = async () => {
+    if (!selectedFile) {
+      Alert.alert('No Video Selected', 'Please tap the file box to pick a local video file.');
+      return;
+    }
     if (!songNumber.trim()) {
       Alert.alert('Validation Error', 'Please enter a song number.');
       return;
@@ -51,32 +92,41 @@ export default function ImportScreen() {
       return;
     }
 
-    // Check duplicate
-    const existing = findSongByNumber(songNumber.trim());
+    const trimmedNumber = songNumber.trim();
+
+    // Check duplicate song number
+    const existing = findSongByNumber(trimmedNumber);
     if (existing) {
       Alert.alert(
         'Duplicate Song Number',
-        `Song number #${songNumber} is already used by "${existing.title}". Please choose a different number.`
+        `Song number #${trimmedNumber} is already used by "${existing.title}". Please choose a different number.`
       );
       return;
     }
 
     try {
-      const created = await addSong({
-        song_number: songNumber.trim(),
+      setIsImporting(true);
+
+      const created = await importVideoFile({
+        sourceUri: selectedFile.uri,
+        originalFilename: selectedFile.name,
+        songNumber: trimmedNumber,
         title: title.trim(),
-        artist: artist.trim() || 'Unknown Artist',
-        media_path: `local://${selectedFileName}`,
-        duration_seconds: 210,
-        is_favorite: false,
+        artist: artist.trim() || undefined,
+        fileSizeBytes: selectedFile.size,
       });
+
+      // Refresh the context library so the new song is immediately searchable
+      await reloadSongs();
 
       Alert.alert('Success', `Imported "${created.title}" as #${created.song_number}!`, [
         { text: 'OK', onPress: () => router.back() },
       ]);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to import song.';
-      Alert.alert('Error', message);
+      Alert.alert('Import Failed', message);
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -87,12 +137,19 @@ export default function ImportScreen() {
         <Text style={styles.sectionLabel}>LOCAL VIDEO FILE</Text>
         <TouchableOpacity
           style={styles.pickerBox}
-          onPress={handleSimulateFilePicker}
-          activeOpacity={0.7}>
+          onPress={handlePickVideo}
+          activeOpacity={0.7}
+          disabled={isImporting}>
           <Ionicons name="film-outline" size={32} color={Colors.dark.accent} />
           <View style={styles.pickerDetails}>
-            <Text style={styles.fileName}>{selectedFileName}</Text>
-            <Text style={styles.fileHint}>Tap to change or select from device storage</Text>
+            <Text style={styles.fileName} numberOfLines={1} ellipsizeMode="middle">
+              {selectedFile ? selectedFile.name : 'Choose a Video File'}
+            </Text>
+            <Text style={styles.fileHint}>
+              {selectedFile
+                ? `Selected ${formatFileSize(selectedFile.size)} • Tap to change`
+                : 'Tap to browse local device storage for MP4 video'}
+            </Text>
           </View>
           <Ionicons name="folder-open-outline" size={20} color={Colors.dark.textSecondary} />
         </TouchableOpacity>
@@ -113,6 +170,7 @@ export default function ImportScreen() {
             value={songNumber}
             onChangeText={setSongNumber}
             keyboardType="number-pad"
+            editable={!isImporting}
           />
         </View>
         <Text style={styles.inputHelp}>
@@ -130,6 +188,7 @@ export default function ImportScreen() {
             placeholderTextColor={Colors.dark.textSecondary}
             value={title}
             onChangeText={setTitle}
+            editable={!isImporting}
           />
         </View>
       </View>
@@ -144,6 +203,7 @@ export default function ImportScreen() {
             placeholderTextColor={Colors.dark.textSecondary}
             value={artist}
             onChangeText={setArtist}
+            editable={!isImporting}
           />
         </View>
       </View>
@@ -153,16 +213,24 @@ export default function ImportScreen() {
         <TouchableOpacity
           style={styles.cancelBtn}
           onPress={() => router.back()}
-          activeOpacity={0.7}>
+          activeOpacity={0.7}
+          disabled={isImporting}>
           <Text style={styles.cancelBtnText}>Cancel</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={styles.saveBtn}
+          style={[styles.saveBtn, (!selectedFile || isImporting) && styles.saveBtnDisabled]}
           onPress={handleSave}
-          activeOpacity={0.8}>
-          <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
-          <Text style={styles.saveBtnText}>Save to Library</Text>
+          activeOpacity={0.8}
+          disabled={!selectedFile || isImporting}>
+          {isImporting ? (
+            <ActivityIndicator color="#FFFFFF" size="small" />
+          ) : (
+            <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+          )}
+          <Text style={styles.saveBtnText}>
+            {isImporting ? 'Saving to Storage...' : 'Save to Library'}
+          </Text>
         </TouchableOpacity>
       </View>
     </ScrollView>
@@ -275,6 +343,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35,
     shadowRadius: 8,
     elevation: 4,
+  },
+  saveBtnDisabled: {
+    opacity: 0.5,
   },
   saveBtnText: {
     color: '#FFFFFF',

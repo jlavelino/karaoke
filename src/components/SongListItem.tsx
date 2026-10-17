@@ -9,6 +9,7 @@ interface SongListItemProps {
   onPlayNow: (song: Song) => void;
   onAddToQueue: (song: Song) => void;
   onToggleFavorite?: (songId: string) => void;
+  onDeleteSong?: (song: Song) => void;
 }
 
 export default function SongListItem({
@@ -16,6 +17,7 @@ export default function SongListItem({
   onPlayNow,
   onAddToQueue,
   onToggleFavorite,
+  onDeleteSong,
 }: SongListItemProps) {
   const formatDuration = (seconds?: number | null) => {
     if (!seconds) return '--:--';
@@ -74,6 +76,16 @@ export default function SongListItem({
           activeOpacity={0.7}>
           <Ionicons name="play" size={16} color="#FFFFFF" />
         </TouchableOpacity>
+
+        {onDeleteSong && (
+          <TouchableOpacity
+            style={styles.deleteBtn}
+            onPress={() => onDeleteSong(song)}
+            activeOpacity={0.6}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="trash-outline" size={18} color="#94A3B8" />
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -156,5 +168,9 @@ const styles = StyleSheet.create({
   },
   playBtn: {
     backgroundColor: Colors.dark.playGreen,
+  },
+  deleteBtn: {
+    padding: 6,
+    marginLeft: 2,
   },
 });
