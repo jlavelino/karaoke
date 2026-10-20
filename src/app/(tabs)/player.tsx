@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,11 +6,15 @@ import {
   SafeAreaView,
   TouchableOpacity,
   ActivityIndicator,
+  BackHandler,
+  Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useEvent, useEventListener } from 'expo';
+import * as ScreenOrientation from 'expo-screen-orientation';
+import { StatusBar } from 'expo-status-bar';
 import { Colors } from '@/constants/theme';
 import { useKaraoke } from '@/context/KaraokeContext';
 import PlayerControls from '@/components/PlayerControls';
@@ -22,6 +26,7 @@ export default function PlayerScreen() {
   const [bufferedSeconds, setBufferedSeconds] = useState(0);
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showFullscreenControls, setShowFullscreenControls] = useState(true);
   const [fileExists, setFileExists] = useState<boolean | null>(null);
 
   // Check if current song uses mock storage protocol or has a physical video
@@ -38,6 +43,83 @@ export default function PlayerScreen() {
   });
 
   const playerStatus = useEvent(player, 'statusChange', { status: player.status });
+
+  // Fullscreen orientation transitions
+  const enterFullscreen = useCallback(async () => {
+    setIsFullscreen(true);
+    setShowFullscreenControls(true);
+    try {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
+    } catch {
+      // Ignored on platforms or devices without orientation lock support
+    }
+  }, []);
+
+  const exitFullscreen = useCallback(async () => {
+    setIsFullscreen(false);
+    setShowFullscreenControls(true);
+    try {
+      await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    } catch {
+      // Ignored on platforms or devices without orientation lock support
+    }
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (isFullscreen) {
+      exitFullscreen();
+    } else {
+      enterFullscreen();
+    }
+  }, [isFullscreen, enterFullscreen, exitFullscreen]);
+
+  // Clean up orientation lock when leaving the Player screen
+  useEffect(() => {
+    return () => {
+      ScreenOrientation.unlockAsync().catch(() => {});
+    };
+  }, []);
+
+  // Handle Android hardware back press when in fullscreen
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      exitFullscreen();
+      return true;
+    });
+    return () => {
+      backHandler.remove();
+    };
+  }, [isFullscreen, exitFullscreen]);
+
+  // Auto-adapt if device physically rotates between portrait and landscape
+  useEffect(() => {
+    const subscription = ScreenOrientation.addOrientationChangeListener((evt) => {
+      const isLandscape =
+        evt.orientationInfo.orientation === ScreenOrientation.Orientation.LANDSCAPE_LEFT ||
+        evt.orientationInfo.orientation === ScreenOrientation.Orientation.LANDSCAPE_RIGHT;
+
+      if (isLandscape && !isFullscreen) {
+        setIsFullscreen(true);
+        setShowFullscreenControls(true);
+      } else if (!isLandscape && isFullscreen) {
+        setIsFullscreen(false);
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [isFullscreen]);
+
+  // Autohide controls in fullscreen mode after 4 seconds of inactivity
+  useEffect(() => {
+    if (!isFullscreen || !showFullscreenControls) return;
+    const timer = setTimeout(() => {
+      setShowFullscreenControls(false);
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [isFullscreen, showFullscreenControls, isPlaying]);
 
   // Verify file existence on device asynchronously for non-mock tracks
   useEffect(() => {
@@ -163,6 +245,7 @@ export default function PlayerScreen() {
   if (!currentSong) {
     return (
       <SafeAreaView style={styles.safeArea}>
+        <StatusBar hidden={false} style="light" />
         <View style={styles.noSongContainer}>
           <Ionicons name="musical-notes-outline" size={54} color={Colors.dark.textSecondary} />
           <Text style={styles.noSongTitle}>No Song Selected</Text>
@@ -186,10 +269,17 @@ export default function PlayerScreen() {
   const canRenderNativeVideo = Boolean(videoSource && !isVideoMissing && !isVideoError);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={[styles.safeArea, isFullscreen && styles.fullscreenSafeArea]}>
+      <StatusBar hidden={isFullscreen} style="light" />
       <View style={[styles.container, isFullscreen && styles.fullscreenContainer]}>
         {/* Video Canvas / Karaoke Display */}
-        <View style={[styles.videoCanvas, isFullscreen && styles.fullscreenVideoCanvas]}>
+        <Pressable
+          style={[styles.videoCanvas, isFullscreen && styles.fullscreenVideoCanvas]}
+          onPress={() => {
+            if (isFullscreen) {
+              setShowFullscreenControls((prev) => !prev);
+            }
+          }}>
           {/* Native Video Surface */}
           {canRenderNativeVideo && (
             <VideoView
@@ -208,40 +298,56 @@ export default function PlayerScreen() {
             </View>
           )}
 
-          {/* Top Stage Bar HUD */}
-          <View style={styles.stageTopBar} pointerEvents="box-none">
-            <View style={styles.videokeBadge}>
-              <Text style={styles.videokeBadgeText}>NUMBERKANTA STEREO</Text>
-            </View>
-
-            {/* Media Mode Badge */}
+          {/* Top Stage Bar HUD (In fullscreen, visible only when showFullscreenControls is true) */}
+          {(!isFullscreen || showFullscreenControls) && (
             <View
-              style={[
-                styles.mediaTypeBadge,
-                canRenderNativeVideo ? styles.mediaTypeBadgeMp4 : styles.mediaTypeBadgeMock,
-              ]}>
-              <Ionicons
-                name={canRenderNativeVideo ? 'videocam' : 'disc'}
-                size={12}
-                color={canRenderNativeVideo ? Colors.dark.playGreen : Colors.dark.accent}
-              />
-              <Text
-                style={[
-                  styles.mediaTypeBadgeText,
-                  canRenderNativeVideo ? styles.mediaTypeBadgeTextMp4 : styles.mediaTypeBadgeTextMock,
-                ]}>
-                {canRenderNativeVideo ? 'LOCAL MP4' : 'SAMPLE TRACK'}
-              </Text>
-            </View>
+              style={[styles.stageTopBar, isFullscreen && styles.stageTopBarFullscreen]}
+              pointerEvents="box-none">
+              <View style={styles.topBarLeft}>
+                {isFullscreen && (
+                  <TouchableOpacity
+                    style={styles.fsExitPill}
+                    onPress={exitFullscreen}
+                    activeOpacity={0.7}
+                    accessibilityLabel="Exit Fullscreen">
+                    <Ionicons name="contract-outline" size={16} color="#FFFFFF" />
+                    <Text style={styles.fsExitPillText}>EXIT</Text>
+                  </TouchableOpacity>
+                )}
+                <View style={styles.videokeBadge}>
+                  <Text style={styles.videokeBadgeText}>NUMBERKANTA STEREO</Text>
+                </View>
+              </View>
 
-            <View style={styles.songNumberDisplay}>
-              <Text style={styles.songNumberDisplayText}>#{currentSong.song_number}</Text>
+              {/* Media Mode Badge */}
+              <View
+                style={[
+                  styles.mediaTypeBadge,
+                  canRenderNativeVideo ? styles.mediaTypeBadgeMp4 : styles.mediaTypeBadgeMock,
+                ]}>
+                <Ionicons
+                  name={canRenderNativeVideo ? 'videocam' : 'disc'}
+                  size={12}
+                  color={canRenderNativeVideo ? Colors.dark.playGreen : Colors.dark.accent}
+                />
+                <Text
+                  style={[
+                    styles.mediaTypeBadgeText,
+                    canRenderNativeVideo ? styles.mediaTypeBadgeTextMp4 : styles.mediaTypeBadgeTextMock,
+                  ]}>
+                  {canRenderNativeVideo ? 'LOCAL MP4' : 'SAMPLE TRACK'}
+                </Text>
+              </View>
+
+              <View style={styles.songNumberDisplay}>
+                <Text style={styles.songNumberDisplayText}>#{currentSong.song_number}</Text>
+              </View>
             </View>
-          </View>
+          )}
 
           {/* Center Stage: Title, Mock Lyrics & Status (Only shown for mock or unavailable tracks) */}
           {showRetroStage && (
-            <View style={styles.lyricStage}>
+            <View style={[styles.lyricStage, isFullscreen && styles.lyricStageFullscreen]}>
               {isVideoMissing && (
                 <View style={styles.warningBanner}>
                   <Ionicons name="warning-outline" size={16} color="#F59E0B" />
@@ -260,10 +366,12 @@ export default function PlayerScreen() {
                 </View>
               )}
 
-              <Text style={styles.stageTitle}>{currentSong.title}</Text>
+              <Text style={[styles.stageTitle, isFullscreen && styles.stageTitleFullscreen]}>
+                {currentSong.title}
+              </Text>
               <Text style={styles.stageArtist}>{currentSong.artist || 'Unknown Artist'}</Text>
 
-              <View style={styles.lyricBox}>
+              <View style={[styles.lyricBox, isFullscreen && styles.lyricBoxFullscreen]}>
                 <Text style={styles.lyricLinePast}>{"♪ I've lived a life that's full ♪"}</Text>
                 <Text style={styles.lyricLineActive}>
                   ★ I TRAVELED EACH AND EVERY HIGHWAY ★
@@ -285,31 +393,37 @@ export default function PlayerScreen() {
             </View>
           )}
 
-          {/* Bottom Stage Info HUD */}
-          <View style={styles.stageBottomBar} pointerEvents="box-none">
-            <Text style={styles.nextUpInfo}>
-              {queue.length > 0
-                ? `NEXT: #${queue[0].song.song_number} ${queue[0].song.title}`
-                : 'QUEUE EMPTY — ADD MORE SONGS'}
-            </Text>
-          </View>
-        </View>
+          {/* Bottom Stage Info HUD (Portrait only) */}
+          {!isFullscreen && (
+            <View style={styles.stageBottomBar} pointerEvents="box-none">
+              <Text style={styles.nextUpInfo}>
+                {queue.length > 0
+                  ? `NEXT: #${queue[0].song.song_number} ${queue[0].song.title}`
+                  : 'QUEUE EMPTY — ADD MORE SONGS'}
+              </Text>
+            </View>
+          )}
+        </Pressable>
 
-        {/* Player Controls Panel */}
-        <PlayerControls
-          currentSong={currentSong}
-          isPlaying={isPlaying}
-          positionSeconds={positionSeconds}
-          durationSeconds={duration}
-          bufferedSeconds={bufferedSeconds}
-          isFullscreen={isFullscreen}
-          onTogglePlayPause={togglePlayPause}
-          onSkipNext={skipNext}
-          onToggleFullscreen={() => setIsFullscreen((prev) => !prev)}
-          onSeek={handleSeek}
-          onRewind={handleRewind}
-          onFastForward={handleFastForward}
-        />
+        {/* Player Controls Panel: Floating in fullscreen, docked in portrait */}
+        {(!isFullscreen || showFullscreenControls) && (
+          <View style={isFullscreen ? styles.floatingControlsContainer : undefined}>
+            <PlayerControls
+              currentSong={currentSong}
+              isPlaying={isPlaying}
+              positionSeconds={positionSeconds}
+              durationSeconds={duration}
+              bufferedSeconds={bufferedSeconds}
+              isFullscreen={isFullscreen}
+              onTogglePlayPause={togglePlayPause}
+              onSkipNext={skipNext}
+              onToggleFullscreen={toggleFullscreen}
+              onSeek={handleSeek}
+              onRewind={handleRewind}
+              onFastForward={handleFastForward}
+            />
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -319,6 +433,9 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#0B0F19',
+  },
+  fullscreenSafeArea: {
+    backgroundColor: '#000000',
   },
   container: {
     flex: 1,
@@ -330,7 +447,7 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    zIndex: 999,
+    zIndex: 9999,
     backgroundColor: '#000000',
   },
   videoCanvas: {
@@ -348,6 +465,8 @@ const styles = StyleSheet.create({
     margin: 0,
     borderRadius: 0,
     borderWidth: 0,
+    backgroundColor: '#000000',
+    padding: 0,
   },
   stageTopBar: {
     flexDirection: 'row',
@@ -358,6 +477,58 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 10,
     zIndex: 10,
+  },
+  stageTopBarFullscreen: {
+    position: 'absolute',
+    top: 16,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(7, 13, 27, 0.85)',
+    zIndex: 25,
+  },
+  topBarLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  fsExitPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(239, 68, 68, 0.25)',
+    borderColor: '#EF4444',
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  fsExitPillText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  floatingControlsContainer: {
+    position: 'absolute',
+    bottom: 16,
+    left: 20,
+    right: 20,
+    zIndex: 25,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  lyricStageFullscreen: {
+    paddingHorizontal: 40,
+    marginTop: 36,
+  },
+  stageTitleFullscreen: {
+    fontSize: 26,
+  },
+  lyricBoxFullscreen: {
+    marginTop: 12,
   },
   videokeBadge: {
     backgroundColor: 'rgba(245, 158, 11, 0.2)',
