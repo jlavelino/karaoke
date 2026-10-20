@@ -19,6 +19,7 @@ import { resolveMediaUri, checkMediaFileExists } from '@/platform/mediaStorage';
 export default function PlayerScreen() {
   const { currentSong, isPlaying, togglePlayPause, skipNext, queue } = useKaraoke();
   const [positionSeconds, setPositionSeconds] = useState(0);
+  const [bufferedSeconds, setBufferedSeconds] = useState(0);
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fileExists, setFileExists] = useState<boolean | null>(null);
@@ -65,10 +66,11 @@ export default function PlayerScreen() {
     };
   }, [currentSong?.media_path]);
 
-  // Reset progress and duration when song changes
+  // Reset progress, buffering, and duration when song changes
   useEffect(() => {
     const handle = requestAnimationFrame(() => {
       setPositionSeconds(0);
+      setBufferedSeconds(0);
       setVideoDuration(null);
     });
     return () => cancelAnimationFrame(handle);
@@ -84,10 +86,13 @@ export default function PlayerScreen() {
     }
   }, [player, isPlaying, videoSource]);
 
-  // Listen to time updates from native video player
-  useEventListener(player, 'timeUpdate', ({ currentTime }) => {
+  // Listen to time updates and buffering from native video player
+  useEventListener(player, 'timeUpdate', ({ currentTime, bufferedPosition }) => {
     if (videoSource) {
       setPositionSeconds(Math.floor(currentTime));
+      if (bufferedPosition !== undefined && bufferedPosition >= 0) {
+        setBufferedSeconds(Math.floor(bufferedPosition));
+      }
     }
   });
 
@@ -102,6 +107,38 @@ export default function PlayerScreen() {
   useEventListener(player, 'playToEnd', () => {
     skipNext();
   });
+
+  const duration = videoDuration || currentSong?.duration_seconds || 240;
+
+  // Seeking handlers supporting both native video and mock catalog tracks
+  const handleSeek = (targetSeconds: number) => {
+    const clamped = Math.max(0, Math.min(targetSeconds, duration));
+    setPositionSeconds(clamped);
+    if (videoSource && player) {
+      if (clamped === 0) {
+        player.replay();
+      } else {
+        // eslint-disable-next-line react-hooks/immutability -- expo-video VideoPlayer uses property setter for frame-accurate seeking
+        player.currentTime = clamped;
+      }
+    }
+  };
+
+  const handleRewind = () => {
+    const target = Math.max(0, positionSeconds - 10);
+    setPositionSeconds(target);
+    if (videoSource && player) {
+      player.seekBy(-10);
+    }
+  };
+
+  const handleFastForward = () => {
+    const target = Math.min(duration, positionSeconds + 10);
+    setPositionSeconds(target);
+    if (videoSource && player) {
+      player.seekBy(10);
+    }
+  };
 
   // Simulated playback time increment for mock/sample catalog songs
   useEffect(() => {
@@ -122,8 +159,6 @@ export default function PlayerScreen() {
       if (interval) clearInterval(interval);
     };
   }, [isPlaying, currentSong, videoSource, skipNext]);
-
-  const duration = videoDuration || currentSong?.duration_seconds || 240;
 
   if (!currentSong) {
     return (
@@ -266,10 +301,14 @@ export default function PlayerScreen() {
           isPlaying={isPlaying}
           positionSeconds={positionSeconds}
           durationSeconds={duration}
+          bufferedSeconds={bufferedSeconds}
           isFullscreen={isFullscreen}
           onTogglePlayPause={togglePlayPause}
           onSkipNext={skipNext}
           onToggleFullscreen={() => setIsFullscreen((prev) => !prev)}
+          onSeek={handleSeek}
+          onRewind={handleRewind}
+          onFastForward={handleFastForward}
         />
       </View>
     </SafeAreaView>
