@@ -28,6 +28,8 @@ export default function PlayerScreen() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showFullscreenControls, setShowFullscreenControls] = useState(true);
   const [fileExists, setFileExists] = useState<boolean | null>(null);
+  const [dismissedErrorSongId, setDismissedErrorSongId] = useState<string | null>(null);
+  const [autoSkipCountdown, setAutoSkipCountdown] = useState<number | null>(null);
 
   // Check if current song uses mock storage protocol or has a physical video
   const isMockSong = !currentSong || currentSong.media_path.startsWith('local://');
@@ -148,15 +150,68 @@ export default function PlayerScreen() {
     };
   }, [currentSong?.media_path]);
 
-  // Reset progress, buffering, and duration when song changes
+  // Reset progress, buffering, duration, and error dismissal when song changes
   useEffect(() => {
     const handle = requestAnimationFrame(() => {
       setPositionSeconds(0);
       setBufferedSeconds(0);
       setVideoDuration(null);
     });
+    Promise.resolve().then(() => {
+      setDismissedErrorSongId(null);
+      setAutoSkipCountdown(null);
+    });
     return () => cancelAnimationFrame(handle);
   }, [currentSong?.id]);
+
+  // Playback failure determination
+  const isVideoMissing = !isMockSong && fileExists === false;
+  const isVideoError = playerStatus?.status === 'error';
+  const hasPlaybackFailure = isVideoMissing || isVideoError;
+  const showErrorModal = Boolean(currentSong && hasPlaybackFailure && dismissedErrorSongId !== currentSong.id);
+
+  // Auto-skip countdown timer on playback failure
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    if (showErrorModal) {
+      Promise.resolve().then(() => {
+        setAutoSkipCountdown((prev) => (prev === null ? 8 : prev));
+      });
+
+      timer = setInterval(() => {
+        setAutoSkipCountdown((prev) => {
+          if (prev === null) return 8;
+          if (prev <= 1) {
+            skipNext();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else {
+      Promise.resolve().then(() => {
+        setAutoSkipCountdown(null);
+      });
+    }
+
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [showErrorModal, skipNext]);
+
+  const handleDismissError = () => {
+    if (currentSong) {
+      setDismissedErrorSongId(currentSong.id);
+    }
+    setAutoSkipCountdown(null);
+  };
+
+  const handleSkipFailedTrack = () => {
+    setDismissedErrorSongId(null);
+    setAutoSkipCountdown(null);
+    skipNext();
+  };
 
   // Sync play/pause state from KaraokeContext to native player
   useEffect(() => {
@@ -263,8 +318,6 @@ export default function PlayerScreen() {
     );
   }
 
-  const isVideoMissing = !isMockSong && fileExists === false;
-  const isVideoError = playerStatus?.status === 'error';
   const showRetroStage = isMockSong || isVideoMissing || isVideoError;
   const canRenderNativeVideo = Boolean(videoSource && !isVideoMissing && !isVideoError);
 
@@ -299,7 +352,7 @@ export default function PlayerScreen() {
           )}
 
           {/* Top Stage Bar HUD (In fullscreen, visible only when showFullscreenControls is true) */}
-          {(!isFullscreen || showFullscreenControls) && (
+          {(!isFullscreen || showFullscreenControls) && !showErrorModal && (
             <View
               style={[styles.stageTopBar, isFullscreen && styles.stageTopBarFullscreen]}
               pointerEvents="box-none">
@@ -348,21 +401,39 @@ export default function PlayerScreen() {
           {/* Center Stage: Title, Mock Lyrics & Status (Only shown for mock or unavailable tracks) */}
           {showRetroStage && (
             <View style={[styles.lyricStage, isFullscreen && styles.lyricStageFullscreen]}>
-              {isVideoMissing && (
+              {isVideoMissing && !showErrorModal && (
                 <View style={styles.warningBanner}>
-                  <Ionicons name="warning-outline" size={16} color="#F59E0B" />
-                  <Text style={styles.warningBannerText}>
-                    Video file missing from storage. Playing mock stage.
-                  </Text>
+                  <View style={styles.bannerContent}>
+                    <Ionicons name="warning-outline" size={16} color="#F59E0B" />
+                    <Text style={styles.warningBannerText}>
+                      File missing from storage. Playing mock stage.
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.bannerSkipBtnAmber}
+                    onPress={handleSkipFailedTrack}
+                    activeOpacity={0.7}>
+                    <Ionicons name="play-skip-forward" size={12} color="#000000" />
+                    <Text style={styles.bannerSkipBtnTextAmber}>Skip</Text>
+                  </TouchableOpacity>
                 </View>
               )}
 
-              {isVideoError && (
+              {isVideoError && !showErrorModal && (
                 <View style={styles.errorBanner}>
-                  <Ionicons name="alert-circle-outline" size={16} color="#EF4444" />
-                  <Text style={styles.errorBannerText}>
-                    Video decode error. Playing mock stage.
-                  </Text>
+                  <View style={styles.bannerContent}>
+                    <Ionicons name="alert-circle-outline" size={16} color="#EF4444" />
+                    <Text style={styles.errorBannerText}>
+                      Video decode error. Playing mock stage.
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.bannerSkipBtnRed}
+                    onPress={handleSkipFailedTrack}
+                    activeOpacity={0.7}>
+                    <Ionicons name="play-skip-forward" size={12} color="#FFFFFF" />
+                    <Text style={styles.bannerSkipBtnTextRed}>Skip</Text>
+                  </TouchableOpacity>
                 </View>
               )}
 
@@ -393,8 +464,82 @@ export default function PlayerScreen() {
             </View>
           )}
 
+          {/* Missing/Corrupt Media Recovery Modal */}
+          {showErrorModal && (
+            <View style={styles.errorModalOverlay}>
+              <View
+                style={[
+                  styles.errorCard,
+                  isVideoError ? styles.errorCardRed : styles.errorCardAmber,
+                ]}>
+                <View
+                  style={[
+                    styles.errorIconCircle,
+                    isVideoError ? styles.errorIconCircleRed : styles.errorIconCircleAmber,
+                  ]}>
+                  <Ionicons
+                    name={isVideoError ? 'alert-circle' : 'warning'}
+                    size={36}
+                    color={isVideoError ? '#EF4444' : '#F59E0B'}
+                  />
+                </View>
+
+                <Text style={styles.errorCardTitle}>
+                  {isVideoError ? 'Video Playback Error' : 'Media File Not Found'}
+                </Text>
+
+                <Text style={styles.errorCardSong}>
+                  #{currentSong.song_number} • {currentSong.title}
+                </Text>
+
+                <Text style={styles.errorCardMessage}>
+                  {isVideoError
+                    ? playerStatus?.error?.message ||
+                      'The video stream could not be decoded. The file may be corrupt or encoded in an unsupported format.'
+                    : 'The physical video file is missing from local storage. It may have been deleted or moved.'}
+                </Text>
+
+                {/* Auto-skip Countdown Badge */}
+                <View style={styles.autoSkipBadge}>
+                  <Ionicons name="timer-outline" size={14} color={Colors.dark.accent} />
+                  <Text style={styles.autoSkipBadgeText}>
+                    Auto-skipping in {autoSkipCountdown !== null ? autoSkipCountdown : 8}s...
+                  </Text>
+                </View>
+
+                {/* Queue status */}
+                <Text style={styles.errorQueueInfo}>
+                  {queue.length > 0
+                    ? `Next up: #${queue[0].song.song_number} ${queue[0].song.title}`
+                    : 'Queue empty — will return to standby.'}
+                </Text>
+
+                {/* Recovery Action Buttons */}
+                <View style={styles.errorActionRow}>
+                  <TouchableOpacity
+                    style={styles.errorDismissBtn}
+                    onPress={handleDismissError}
+                    activeOpacity={0.7}
+                    accessibilityLabel="Sing along using mock lyrics stage">
+                    <Ionicons name="mic-outline" size={16} color="#FFFFFF" />
+                    <Text style={styles.errorDismissBtnText}>Sing in Mock Stage</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.errorSkipMainBtn}
+                    onPress={handleSkipFailedTrack}
+                    activeOpacity={0.8}
+                    accessibilityLabel="Skip to next song">
+                    <Ionicons name="play-skip-forward" size={16} color="#000000" />
+                    <Text style={styles.errorSkipMainBtnText}>Skip Song Now</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+
           {/* Bottom Stage Info HUD (Portrait only) */}
-          {!isFullscreen && (
+          {!isFullscreen && !showErrorModal && (
             <View style={styles.stageBottomBar} pointerEvents="box-none">
               <Text style={styles.nextUpInfo}>
                 {queue.length > 0
@@ -602,6 +747,7 @@ const styles = StyleSheet.create({
   warningBanner: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     backgroundColor: 'rgba(245, 158, 11, 0.2)',
     borderColor: '#F59E0B',
     borderWidth: 1,
@@ -609,7 +755,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     marginBottom: 16,
-    gap: 6,
+    gap: 8,
+    width: '100%',
   },
   warningBannerText: {
     color: '#FCD34D',
@@ -619,6 +766,7 @@ const styles = StyleSheet.create({
   errorBanner: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     backgroundColor: 'rgba(239, 68, 68, 0.2)',
     borderColor: '#EF4444',
     borderWidth: 1,
@@ -626,12 +774,176 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     marginBottom: 16,
-    gap: 6,
+    gap: 8,
+    width: '100%',
   },
   errorBannerText: {
     color: '#FCA5A5',
     fontSize: 11,
     fontWeight: '600',
+  },
+  bannerContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  bannerSkipBtnAmber: {
+    backgroundColor: '#F59E0B',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  bannerSkipBtnTextAmber: {
+    color: '#000000',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  bannerSkipBtnRed: {
+    backgroundColor: '#EF4444',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  bannerSkipBtnTextRed: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  errorModalOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(0, 0, 0, 0.88)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+    zIndex: 50,
+  },
+  errorCard: {
+    backgroundColor: '#0F172A',
+    borderRadius: 18,
+    padding: 22,
+    alignItems: 'center',
+    maxWidth: 440,
+    width: '100%',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.6,
+    shadowRadius: 16,
+    elevation: 12,
+  },
+  errorCardRed: {
+    borderColor: '#EF4444',
+    borderWidth: 2,
+  },
+  errorCardAmber: {
+    borderColor: '#F59E0B',
+    borderWidth: 2,
+  },
+  errorIconCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  errorIconCircleRed: {
+    backgroundColor: 'rgba(239, 68, 68, 0.18)',
+    borderColor: '#EF4444',
+    borderWidth: 1,
+  },
+  errorIconCircleAmber: {
+    backgroundColor: 'rgba(245, 158, 11, 0.18)',
+    borderColor: '#F59E0B',
+    borderWidth: 1,
+  },
+  errorCardTitle: {
+    color: '#F8FAFC',
+    fontSize: 18,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  errorCardSong: {
+    color: Colors.dark.accent,
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  errorCardMessage: {
+    color: Colors.dark.textSecondary,
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 8,
+    lineHeight: 18,
+    paddingHorizontal: 8,
+  },
+  autoSkipBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 14,
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+  },
+  autoSkipBadgeText: {
+    color: Colors.dark.accent,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  errorQueueInfo: {
+    color: '#64748B',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 8,
+  },
+  errorActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 18,
+    width: '100%',
+  },
+  errorDismissBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#1E293B',
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+  },
+  errorDismissBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  errorSkipMainBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: Colors.dark.accent,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  errorSkipMainBtnText: {
+    color: '#000000',
+    fontWeight: '900',
+    fontSize: 12,
   },
   lyricStage: {
     alignItems: 'center',
