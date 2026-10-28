@@ -319,13 +319,25 @@ export async function recompactQueuePositions(): Promise<void> {
 }
 
 /**
- * Seeds the queue with the first 3 sample songs from the catalog if the queue is empty.
+ * Seeds the queue with the first 3 sample songs from the catalog if the queue has never been initialized.
+ * Uses an app_settings marker so that if the user explicitly clears the queue, it remains empty across restarts.
  * Returns the current queue items.
  */
 export async function seedInitialQueueIfEmpty(): Promise<QueueItem[]> {
   const db = await getDatabase();
-  const count = await getQueueCount();
-  if (count > 0) {
+
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY NOT NULL,
+      value TEXT NOT NULL
+    );
+  `);
+
+  const setting = await db.getFirstAsync<{ value: string }>(
+    "SELECT value FROM app_settings WHERE key = 'queue_initialized' LIMIT 1;"
+  );
+
+  if (setting) {
     return getQueue();
   }
 
@@ -349,6 +361,10 @@ export async function seedInitialQueueIfEmpty(): Promise<QueueItem[]> {
         [queueItemId, songs[i].id, i + 1, now + i * 10]
       );
     }
+
+    await db.runAsync(
+      "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('queue_initialized', '1');"
+    );
   });
 
   return getQueue();
