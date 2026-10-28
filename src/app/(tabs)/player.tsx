@@ -20,6 +20,14 @@ import { useKaraoke } from '@/context/KaraokeContext';
 import PlayerControls from '@/components/PlayerControls';
 import { resolveMediaUri, checkMediaFileExists } from '@/platform/mediaStorage';
 
+interface IntermissionData {
+  score: number;
+  praise: string;
+  countdown: number;
+  songNumber: string;
+  songTitle: string;
+}
+
 export default function PlayerScreen() {
   const { currentSong, isPlaying, togglePlayPause, skipNext, queue } = useKaraoke();
   const [positionSeconds, setPositionSeconds] = useState(0);
@@ -30,6 +38,7 @@ export default function PlayerScreen() {
   const [fileExists, setFileExists] = useState<boolean | null>(null);
   const [dismissedErrorSongId, setDismissedErrorSongId] = useState<string | null>(null);
   const [autoSkipCountdown, setAutoSkipCountdown] = useState<number | null>(null);
+  const [intermissionData, setIntermissionData] = useState<IntermissionData | null>(null);
 
   // Check if current song uses mock storage protocol or has a physical video
   const isMockSong = !currentSong || currentSong.media_path.startsWith('local://');
@@ -150,7 +159,7 @@ export default function PlayerScreen() {
     };
   }, [currentSong?.media_path]);
 
-  // Reset progress, buffering, duration, and error dismissal when song changes
+  // Reset progress, buffering, duration, error dismissal, and intermission when song changes
   useEffect(() => {
     const handle = requestAnimationFrame(() => {
       setPositionSeconds(0);
@@ -160,6 +169,7 @@ export default function PlayerScreen() {
     Promise.resolve().then(() => {
       setDismissedErrorSongId(null);
       setAutoSkipCountdown(null);
+      setIntermissionData(null);
     });
     return () => cancelAnimationFrame(handle);
   }, [currentSong?.id]);
@@ -213,15 +223,80 @@ export default function PlayerScreen() {
     skipNext();
   };
 
-  // Sync play/pause state from KaraokeContext to native player
+  // Dynamically load native video source when current song changes
   useEffect(() => {
-    if (!player || !videoSource) return;
-    if (isPlaying) {
-      player.play();
+    if (!player) return;
+    if (videoSource) {
+      player.replace(videoSource);
+      if (isPlaying) {
+        player.play();
+      }
     } else {
       player.pause();
     }
-  }, [player, isPlaying, videoSource]);
+  }, [player, videoSource, isPlaying]);
+
+  // Handle natural finish celebration & auto-advance intermission
+  const handleNaturalSongFinish = useCallback(() => {
+    if (!currentSong) return;
+
+    const praises = [
+      '🌟 PERFECT SINGER! PASOK SA BANGA! 🌟',
+      '👏 SUPERSTAR PERFORMANCE! 👏',
+      '🎤 GALING! MAHUSAY! 🎤',
+      '🔥 RECORDING ARTIST LEVEL! 🔥',
+    ];
+    const score = Math.floor(Math.random() * 9) + 92; // 92 to 100
+    const praise = praises[Math.floor(Math.random() * praises.length)];
+
+    setIntermissionData({
+      score,
+      praise,
+      countdown: 3,
+      songNumber: currentSong.song_number,
+      songTitle: currentSong.title,
+    });
+  }, [currentSong]);
+
+  // Auto-advance countdown timer during celebration intermission
+  useEffect(() => {
+    if (!intermissionData) return;
+
+    const timer = setInterval(() => {
+      setIntermissionData((prev) => {
+        if (!prev) return null;
+        if (prev.countdown <= 1) {
+          skipNext();
+          return null;
+        }
+        return { ...prev, countdown: prev.countdown - 1 };
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [intermissionData, skipNext]);
+
+  const handleAdvanceImmediately = () => {
+    setIntermissionData(null);
+    skipNext();
+  };
+
+  const handleReplaySong = () => {
+    setIntermissionData(null);
+    handleSeek(0);
+    if (!isPlaying) {
+      togglePlayPause();
+    }
+  };
+
+  // Exit fullscreen if returned to standby/no song
+  useEffect(() => {
+    if (!currentSong && isFullscreen) {
+      Promise.resolve().then(() => {
+        exitFullscreen();
+      });
+    }
+  }, [currentSong, isFullscreen, exitFullscreen]);
 
   // Listen to time updates and buffering from native video player
   useEventListener(player, 'timeUpdate', ({ currentTime, bufferedPosition }) => {
@@ -242,7 +317,7 @@ export default function PlayerScreen() {
 
   // Auto-advance when video naturally finishes
   useEventListener(player, 'playToEnd', () => {
-    skipNext();
+    handleNaturalSongFinish();
   });
 
   const duration = videoDuration || currentSong?.duration_seconds || 240;
@@ -280,12 +355,12 @@ export default function PlayerScreen() {
   // Simulated playback time increment for mock/sample catalog songs
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
-    if (isPlaying && currentSong && !videoSource) {
+    if (isPlaying && currentSong && !videoSource && !intermissionData) {
       interval = setInterval(() => {
         setPositionSeconds((prev) => {
           const max = currentSong.duration_seconds || 240;
           if (prev >= max) {
-            skipNext();
+            handleNaturalSongFinish();
             return 0;
           }
           return prev + 1;
@@ -295,24 +370,39 @@ export default function PlayerScreen() {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isPlaying, currentSong, videoSource, skipNext]);
+  }, [isPlaying, currentSong, videoSource, intermissionData, handleNaturalSongFinish]);
 
   if (!currentSong) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <StatusBar hidden={false} style="light" />
         <View style={styles.noSongContainer}>
-          <Ionicons name="musical-notes-outline" size={54} color={Colors.dark.textSecondary} />
-          <Text style={styles.noSongTitle}>No Song Selected</Text>
+          <View style={styles.standbyDiscCircle}>
+            <Ionicons name="disc" size={54} color={Colors.dark.accent} />
+          </View>
+          <Text style={styles.noSongTitle}>VIDEOKE STANDBY</Text>
           <Text style={styles.noSongSubtitle}>
-            Enter a number on the Keypad or pick a song from the Songbook to start singing!
+            Queue is currently empty. Punch in a song number on the Keypad or browse the Songbook to start singing!
           </Text>
-          <TouchableOpacity
-            style={styles.goToKeypadBtn}
-            onPress={() => router.push('/(tabs)')}>
-            <Ionicons name="keypad" size={16} color="#FFFFFF" />
-            <Text style={styles.goToKeypadText}>Go to Keypad</Text>
-          </TouchableOpacity>
+          <View style={styles.standbyActionRow}>
+            <TouchableOpacity
+              style={styles.goToKeypadBtn}
+              onPress={() => router.push('/(tabs)')}
+              activeOpacity={0.8}
+              accessibilityLabel="Open Keypad">
+              <Ionicons name="keypad" size={18} color="#000000" />
+              <Text style={styles.goToKeypadText}>Open Keypad</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.goToSongbookBtn}
+              onPress={() => router.push('/(tabs)/songbook')}
+              activeOpacity={0.8}
+              accessibilityLabel="Browse Songbook">
+              <Ionicons name="book-outline" size={18} color="#FFFFFF" />
+              <Text style={styles.goToSongbookText}>Songbook</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </SafeAreaView>
     );
@@ -352,7 +442,7 @@ export default function PlayerScreen() {
           )}
 
           {/* Top Stage Bar HUD (In fullscreen, visible only when showFullscreenControls is true) */}
-          {(!isFullscreen || showFullscreenControls) && !showErrorModal && (
+          {(!isFullscreen || showFullscreenControls) && !showErrorModal && !intermissionData && (
             <View
               style={[styles.stageTopBar, isFullscreen && styles.stageTopBarFullscreen]}
               pointerEvents="box-none">
@@ -538,8 +628,64 @@ export default function PlayerScreen() {
             </View>
           )}
 
+          {/* Natural Playback Finish Celebration & Auto-Advance Intermission */}
+          {intermissionData && (
+            <View style={styles.intermissionOverlay}>
+              <View style={styles.intermissionCard}>
+                <View style={styles.scoreCircle}>
+                  <Text style={styles.scoreNumber}>{intermissionData.score}</Text>
+                  <Text style={styles.scoreLabel}>POINTS</Text>
+                </View>
+
+                <Text style={styles.intermissionTitle}>PERFORMANCE COMPLETE!</Text>
+                <Text style={styles.intermissionPraise}>{intermissionData.praise}</Text>
+
+                <Text style={styles.finishedSongText}>
+                  #{intermissionData.songNumber} • {intermissionData.songTitle}
+                </Text>
+
+                {/* Next Song Status or Standby countdown */}
+                <View style={styles.intermissionNextBadge}>
+                  <Ionicons name="timer-outline" size={15} color={Colors.dark.accent} />
+                  <Text style={styles.intermissionNextText}>
+                    {queue.length > 0
+                      ? `Up Next: #${queue[0].song.song_number} ${queue[0].song.title} (${intermissionData.countdown}s)`
+                      : `Returning to Standby in ${intermissionData.countdown}s...`}
+                  </Text>
+                </View>
+
+                {/* Actions */}
+                <View style={styles.intermissionActionRow}>
+                  <TouchableOpacity
+                    style={styles.intermissionReplayBtn}
+                    onPress={handleReplaySong}
+                    activeOpacity={0.7}
+                    accessibilityLabel="Replay this song">
+                    <Ionicons name="refresh" size={16} color="#FFFFFF" />
+                    <Text style={styles.intermissionReplayText}>Replay Song</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.intermissionAdvanceBtn}
+                    onPress={handleAdvanceImmediately}
+                    activeOpacity={0.8}
+                    accessibilityLabel="Advance to next song now">
+                    <Ionicons
+                      name={queue.length > 0 ? 'play-skip-forward' : 'checkmark'}
+                      size={16}
+                      color="#000000"
+                    />
+                    <Text style={styles.intermissionAdvanceText}>
+                      {queue.length > 0 ? 'Sing Now' : 'Standby'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+
           {/* Bottom Stage Info HUD (Portrait only) */}
-          {!isFullscreen && !showErrorModal && (
+          {!isFullscreen && !showErrorModal && !intermissionData && (
             <View style={styles.stageBottomBar} pointerEvents="box-none">
               <Text style={styles.nextUpInfo}>
                 {queue.length > 0
@@ -1044,17 +1190,172 @@ const styles = StyleSheet.create({
   goToKeypadBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.dark.playGreen,
+    backgroundColor: Colors.dark.accent,
     paddingHorizontal: 20,
     paddingVertical: 12,
     borderRadius: 12,
-    marginTop: 20,
     gap: 8,
   },
   goToKeypadText: {
+    color: '#000000',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  standbyDiscCircle: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: 'rgba(245, 158, 11, 0.1)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  standbyActionRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 24,
+  },
+  goToSongbookBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1E293B',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    gap: 8,
+  },
+  goToSongbookText: {
     color: '#FFFFFF',
     fontWeight: '800',
     fontSize: 14,
+  },
+  intermissionOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(0, 0, 0, 0.88)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+    zIndex: 60,
+  },
+  intermissionCard: {
+    backgroundColor: '#0A1120',
+    borderColor: Colors.dark.accent,
+    borderWidth: 2,
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+    maxWidth: 440,
+    width: '100%',
+    shadowColor: Colors.dark.accent,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 16,
+    elevation: 14,
+  },
+  scoreCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    borderWidth: 2,
+    borderColor: Colors.dark.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  scoreNumber: {
+    color: '#FCD34D',
+    fontSize: 32,
+    fontWeight: '900',
+    lineHeight: 36,
+  },
+  scoreLabel: {
+    color: Colors.dark.accent,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+  },
+  intermissionTitle: {
+    color: '#F8FAFC',
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textAlign: 'center',
+  },
+  intermissionPraise: {
+    color: Colors.dark.accent,
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  finishedSongText: {
+    color: '#94A3B8',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 6,
+    textAlign: 'center',
+  },
+  intermissionNextBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(245, 158, 11, 0.12)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.3)',
+    maxWidth: '100%',
+  },
+  intermissionNextText: {
+    color: Colors.dark.accent,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  intermissionActionRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+    width: '100%',
+  },
+  intermissionReplayBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#1E293B',
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  intermissionReplayText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  intermissionAdvanceBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: Colors.dark.playGreen,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  intermissionAdvanceText: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+    fontSize: 13,
   },
 });
 
